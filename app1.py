@@ -1,12 +1,11 @@
 import os
 import json
-import requests
+import re
 import streamlit as st
 import pdfplumber
 from PIL import Image
 import easyocr
 import numpy as np
-import uuid
 import gc
 import google.generativeai as genai
 
@@ -60,6 +59,11 @@ def extract_text_from_pdf(file_path):
         for res in results:
             text += res[1] + " "
     return text.strip()
+
+def clean_extracted_text(raw_text):
+    text = re.sub(r"[^a-zA-Z0-9:/\-\s]", " ", raw_text)  # remove junk symbols
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 # EXTRACT JSON USING LOCAL LLM

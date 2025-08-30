@@ -64,52 +64,48 @@ def extract_text_from_pdf(file_path):
 
 # EXTRACT JSON USING LOCAL LLM
 def extract_json_from_text(extracted_text):
+    cleaned_text = clean_extracted_text(extracted_text)
     model = genai.GenerativeModel(MODEL_NAME)
-    prompt = (
-        "You are an AI that extracts structured data from documents. "
-        "Always output a JSON object strictly in this format:\n\n"
-        "{\n"
-        "  \"type\": \"object\",\n"
-        "  \"properties\": {\n"
-        "    \"document_type\": \"<detected type like Aadhaar Card, PAN Card, Passport, Driving License, Marksheet, Invoice, Contract, Text>\",\n"
-        "    \"extracted_data\": { ...fields depending on document type OR fallback message only... }\n"
-        "  },\n"
-        "  \"compliance_status\": \"<status based on completeness and compliance rules>\",\n"
-        "  \"name\": \"response\"\n"
-        "}\n\n"
-        "### Rules by Document Type ###\n"
-        "- Aadhaar Card -> Extract: name, dob, gender, aadhaar_number, Address.\n"
-        "- PAN Card -> Extract: name, father's name, dob, Pan number, signature.\n"
-        "- Passport -> Extract: name, passport_number, dob, nationality, issue_date, expiry_date.\n"
-        "- Driving License -> Extract: name, license_number, dob, issue_date, validity.\n"
-        "- Marksheet/Examination Certificate -> Extract: Roll No, exam_type, certificate_number, Candidate Name , Mother Name, Father Name, DOB, School/College Name, Exam Year, Subjects [{Subject, Max Marks, Total Marks, Grade}], Result, Date of Issue, Place, Verification Website.\n"
-        "- Invoice -> Extract: invoice_number, date, seller_name, buyer_name, items, total_amount, tax_amount.\n"
-        "- Contract -> Extract: contract_id, parties_involved, start_date, end_date, key_terms.\n"
-        "- Voter ID -> Extract: name, father_name, dob, gender, voter_id_number, address.\n"
-        "- Birth Certificate -> Extract: child_name, father_name, mother_name, dob, place_of_birth, registration_number.\n"
-        "- Property Registration -> Extract: owner_name, property_address, registration_number, date_of_registration, registrar_office.\n"
-        "- Tax Return: Extract: taxpayer_name, pan_number, assessment_year, income, tax_paid, refund_status.\n"
-        "- Income Certificate -> Extract: Certificate_number, Applicant_name, Father's_name, Address, Annual_income, Issue_date, Validity, Issuing_authority.\n"
-        "### Rules for compliance_status ###\n"
-        "- If all fields are present -> 'compliant'.\n"
-        "- If document fields are fully extracted and valid -> 'Data extracted successfully for regulatory review.'\n"
-        "- If some fields are missing/unclear -> 'Partial data extracted — further verification required.'\n"
-        "- If document type is unrecognized -> 'Document type not identified — manual review required.'\n"
-        "- If sensitive data mismatch detected -> 'Data format issue — needs correction.'\n"
-        "- If type not identified but text present (non-document) ->\n"
-        "  document_type='text',\n"
-        "  extracted_data={\"message\": \"It appears that the input was minimal or unrelated to a document. Please provide a proper document.\"},\n"
-        "  compliance_status='N/A'.\n"
-        "### Important ###\n"
-        "- Detect document type first.\n"
-        "- Never invent or hallucinate fields.\n"
-        "- If input is non-document text, only return the fallback message under extracted_data.\n"
-        "- Output JSON only. Never include explanations outside JSON."
-    )
+    # Clean prompt
+    prompt = f"""
+        You are an AI that extracts structured JSON from government documents.  
+        From the following text input, detect the document type and extract all relevant fields.  
+        Output strictly in JSON format only, without any explanations.
+    
+    
+        Rules:
+        1. Document types: Aadhaar Card, PAN Card, Passport, Driving License, Marksheet, Invoice, Contract, Voter ID, Birth Certificate, Property Registration, Tax Return, Income Certificate.
+        2. Fields: Extract the fields as mentioned in the rules. For any missing fields, use null or "".
+        3. If the input is plain text:
+            - Single word:
+                - If it is a name → extracted_data = {{"name": "<input>"}}
+                - If it is an action word → extracted_data = {{"action": "<input>", "description": "User requested to initiate <input> action."}}
+                - If it is a greeting → extracted_data = {{"action": "<input>", "description": "User greeted the system with '<input>'."}}
+                - Else → extracted_data = {{"message": "<input>"}}
+            - Phrase/sentence → extracted_data = {{"message": "<input>"}}
+        4. Random/unrelated text: If the text is random or unrelated, set document_type = "text" and provide a message.
+        5. Always include compliance_status based on rules:  
+            - If all fields are present → "compliant"  
+            - If some fields are missing or unclear → "partial data extracted — further verification required"  
+            - If document type is unrecognized → "manual review required"  
+            - If sensitive data mismatch detected → "data format issue — needs correction"
+        6. Output format:
+        {{
+            "type": "object",
+            "properties": {{
+                "document_type": "<detected type or 'text'>",
+                "extracted_data": {{ ...fields or message ... }},
+                "compliance_status": "<status based on above rules>"
+            }},
+            "name": "response"
+        }}
+    
+        Input Text:
+        \"\"\"{cleaned_text}\"\"\"
+    """
 
-    response = model.generate_content([prompt, extracted_text])
+    response = model.generate_content([prompt])
     return response.text.strip()
-
 
 # STREAMLIT UI
 st.set_page_config(page_title="Government Document Processor", layout="wide")

@@ -1,39 +1,27 @@
 import os
 import json
 import re
-import streamlit as st
+import tempfile
 import pdfplumber
+import functions_framework
 from PIL import Image
 import easyocr
 import numpy as np
 import gc
 import google.generativeai as genai
+from flask import jsonify, make_response, request
 
 
-API_KEY = os.getenv("GEMINI_API_KEY", None)
+API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
-    st.error("Gemini API key not found. Please set GEMINI_API_KEY environment variable.")
-    API_KEY = "AIzaSyB1heo6JymJ4aOcqBRZhg3GzZwiOEpsFis"
-else:
-    genai.configure(api_key=API_KEY)
+    raise RuntimeError("GEMINI_API_KEY not set")
 
-MODEL_NAME = "gemini-1.5-flash" 
+genai.configure(api_key=API_KEY)
+MODEL_NAME = "gemini-1.5-flash"
 
-def clear_memory():
-    gc.collect()
-    try:
-        import torch
-        torch.cuda.empty_cache()
-    except:
-        pass
+ocr_reader = easyocr.Reader(['en'], gpu=False)
 
-# INITIALIZE OCR (ONLY ONCE)
-if "ocr_reader" not in st.session_state:
-    st.session_state.ocr_reader = easyocr.Reader(['en'], gpu=True)
-
-reader = st.session_state.ocr_reader
-
-def extract_text_from_pdf(file_path):
+def extract_text_from_file(file_path: str) -> str:
     text = ""
     if file_path.lower().endswith(".pdf"):
         with pdfplumber.open(file_path) as pdf:
@@ -46,28 +34,24 @@ def extract_text_from_pdf(file_path):
                     # PDF page is scanned → convert to image then OCR
                     pil_image = page.to_image(resolution=150).original
                     np_image = np.array(pil_image)
-                    results = reader.readtext(np_image)
-                    for res in results:
-                        text += res[1] + " "
-                    text += "\n"
-
+                    ocr_results = ocr_reader.readtext(np_image, detail=1)
+                    text += " ".join([t for _, t, _ in ocr_results])
     else:
         # Handle Image (jpg, png, jpeg)
         image = Image.open(file_path)
         np_image = np.array(image) 
-        results = reader.readtext(np_image)
-        for res in results:
-            text += res[1] + " "
+        ocr_results = ocr_reader.readtext(np_image, detail=1)
+        text += " ".join([t for _, t, _ in ocr_results])
     return text.strip()
 
-def clean_extracted_text(raw_text):
-    text = re.sub(r"[^a-zA-Z0-9:/\-\s]", " ", raw_text)  # remove junk symbols
+def clean_extracted_text(raw_text: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9:/\-\s]", " ", raw_text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
 # EXTRACT JSON USING LOCAL LLM
-def extract_json_from_text(extracted_text):
+def extract_json_from_text(extracted_text: str) -> str:
     cleaned_text = clean_extracted_text(extracted_text)
     model = genai.GenerativeModel(MODEL_NAME)
     # Clean prompt
@@ -109,43 +93,63 @@ def extract_json_from_text(extracted_text):
     """
 
     response = model.generate_content([prompt])
-    return response.text.strip()
+    return response.text.strip() if response and response.text else "{}"
 
-# STREAMLIT UI
-st.set_page_config(page_title="Government Document Processor", layout="wide")
-st.title("📄 Government Document Processor (Gemini API)")
 
-text_input = st.text_area("Your Input (Text)", placeholder="Provide text details or describe your challenge...")
-uploaded_file = st.file_uploader("Upload File", type=["pdf", "png", "jpg", "jpeg"])
+def cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
-if st.button("🔍 Process with Gemini API"):
-    extracted_text = ""
-
-    if uploaded_file:
-        os.makedirs("uploads", exist_ok=True)
-        file_path = os.path.join("uploads", uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-
-        if uploaded_file.type == "application/pdf":
-            extracted_text = extract_text_from_pdf(file_path)
-        elif uploaded_file.type in ["image/png", "image/jpeg"]:
-            extracted_text = extract_text_from_pdf(file_path)
-
-    elif text_input.strip():
-        extracted_text = text_input.strip()
-
-    if extracted_text:
-        st.subheader("Extracted Text (Preview)")
-        st.text_area("Extracted Text", extracted_text, height=200)
-
-        with st.spinner("Processing..."):
-            json_result = extract_json_from_text(extracted_text)
-
-        st.subheader("AI Response:")
+# Main Cloud Function
+@functions_framework.http
+def process(request):
+        if request.method == "OPTIONS":
+            return cors(make_response(("", 204)))
+        
         try:
-            st.json(json.loads(json_result))
-        except:
-            st.text(json_result)
-    else:
-        st.warning("Could not extract any text from this file.")
+            extracted_text = ""
+
+            # ---------- 1. File upload ----------
+            if request.files:
+                f = next(iter(request.files.values()))
+                suffix = os.path.splitext(f.filename)[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
+                    f.save(tmp.name)
+                    extracted_text = extract_text_from_file(tmp.name)
+                    os.unlink(tmp.name)  # cleanup temp file
+
+
+            # ---------- 2. JSON input ----------
+            if not extracted_text and request.is_json:
+                data = request.get_json(silent=True)
+                if data and "text" in data:
+                    extracted_text = data["text"] 
+
+            # ---------- 3. Plain text input ----------
+            if not extracted_text:
+                raw_text = request.data.decode("utf-8").strip()
+                if raw_text:
+                    extracted_text = raw_text
+            
+            # ---------- 4. No input ----------
+            if not extracted_text:
+                return cors(make_response(jsonify({"error": "No input provided"}), 400))
+        
+
+            # ---------- 5. Call AI ----------
+            json_result = extract_json_from_text(extracted_text)
+    
+            # Try parsing AI response as JSON
+            try:
+                result = json.loads(json_result)
+            except Exception:
+                result = {"raw_ai_response": json_result}
+    
+            return cors(make_response(jsonify(result), 200))   
+        
+        except Exception as e:
+            return cors(make_response(jsonify({"error": str(e)}), 500))
+
+

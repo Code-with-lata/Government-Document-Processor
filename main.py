@@ -9,8 +9,11 @@ import easyocr
 import numpy as np
 import gc
 import google.generativeai as genai
+from dotenv import load_dotenv
 from flask import jsonify, make_response, request
 
+# Load environment variables from .env file
+load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:

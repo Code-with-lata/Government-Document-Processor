@@ -119,9 +119,16 @@ def process(request):
                 suffix = os.path.splitext(f.filename)[1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     f.save(tmp.name)
-                    extracted_text = extract_text_from_file(tmp.name)
-                    os.unlink(tmp.name)  # cleanup temp file
-
+                    temp_path = tmp.name 
+                    try:
+                        extracted_text = extract_text_from_file(temp_path)
+                    finally:
+                        if os.path.exists(temp_path):
+                            try:
+                                os.remove(temp_path)  # safe delete
+                            except PermissionError:
+                                pass    # cleanup temp file
+                    
 
             # ---------- 2. JSON input ----------
             if not extracted_text and request.is_json:

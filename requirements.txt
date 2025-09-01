@@ -8,3 +8,4 @@ numpy==1.26.0
 torch==2.2.0+cpu
 torchvision==0.18.1+cpu
 regex==2025.8.8
+python-dotenv==1.0.0

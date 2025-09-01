@@ -7,7 +7,6 @@ import functions_framework
 from PIL import Image
 import easyocr
 import numpy as np
-import gc
 import google.generativeai as genai
 from dotenv import load_dotenv
 from flask import jsonify, make_response, request

@@ -128,7 +128,6 @@ def process(request):
                                 os.remove(temp_path)  # safe delete
                             except PermissionError:
                                 pass    # cleanup temp file
-                    
 
             # ---------- 2. JSON input ----------
             if not extracted_text and request.is_json:

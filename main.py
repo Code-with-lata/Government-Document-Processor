@@ -117,7 +117,7 @@ def process(request):
             if request.files:
                 f = next(iter(request.files.values()))
                 suffix = os.path.splitext(f.filename)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     f.save(tmp.name)
                     extracted_text = extract_text_from_file(tmp.name)
                     os.unlink(tmp.name)  # cleanup temp file
